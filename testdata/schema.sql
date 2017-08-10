@@ -37,21 +37,6 @@ CREATE TABLE IF NOT EXISTS reporting.DimOrderStatus
     order_status_id INT PRIMARY KEY,
     name text
 );
-INSERT INTO reporting.DimOrderStatus
-VALUES
-
-    (1, 'Pending'),
-    (2, 'Backorderd'),
-    (3, 'Picking'),
-    (4, 'Ready for Shipment'),
-    (5, 'Shipped'),
-    (6, 'Cancelled'),
-    (7, 'Hold: Contact Customer'),
-    (8, 'Hold: Payment Failed'),
-    (9, 'Other')
-;
-
-
 
 CREATE TABLE IF NOT EXISTS reporting.FactOrderLine
 (
@@ -66,4 +51,13 @@ CREATE TABLE IF NOT EXISTS reporting.FactOrderLine
     total_discount decimal(12,2) NOT NULL DEFAULT 0,
     total_price decimal(12,2) NOT NULL,
     total_cost decimal(12,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reporting.FactInventoryEvent
+(
+    inventory_id SERIAL PRIMARY KEY,
+    product_id int not null REFERENCES reporting.DimProduct(product_id),
+    event_date timestamptz not null,
+    quantity int not null DEFAULT 1,
+    unit_cost decimal(12,2) NOT NULL
 );

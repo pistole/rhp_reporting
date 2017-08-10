@@ -87,6 +87,35 @@ reporting:
                 max: "2016-12-31"
         - "Product totals":
             cols: ["product.name", "summed_total_cost", "total_quantity"]
+        - "Product totals with funky filter":
+            cols: ["product.name", "summed_total_cost", "total_quantity"]
+            filters:
+                - customer.name:
+                    filter_operator: SUBSTRING
+                    value: "foobar"
         - "Products by Customer":
             cols: ["customer.name", "product.name", "avg_total_cost", "summed_total_cost", "total_quantity"]
-        
+        - "Products by Customer Filtered":
+            cols: ["customer.name", "product.name", "avg_total_cost", "summed_total_cost", "total_quantity"]
+            filters:
+                - customer.name:
+                    filter_operator: SUBSTRING
+                    value: "foobar"
+                - product_id:
+                    filter_operator: EQUALS
+                    value: "12345"
+                - product_id:
+                    filter_operator: EQUALS
+                    value: "12345666"
+        - "Product ids":
+            cols: [product_id, summed_total_cost]
+            filters:
+                - product_id:
+                    filter_operator: GREATER
+                    value: "3"
+        - "Product ids null":
+            cols: [product_id, summed_total_cost]
+            filters:
+                - product_id:
+                    filter_operator: EQUALS
+                    value: null
