@@ -1,0 +1,92 @@
+reporting:
+    tables:
+        facts:
+            - factorderline:
+                col_names: [order_line_id, product_id, order_date, ship_date, customer_id, campaign_id, order_status_id, quantity, total_discount, total_price, total_cost]
+        dimensions:
+            - dimproduct:
+                col_names: [product_id, name, curr_price]
+            - dimcustomer:
+                col_names: [customer_id, name]
+    measures:
+        - summed_total_cost:
+            required_cols: [total_cost]
+            cols: 
+                - summed_total_cost: 
+                    sql: "total_cost"
+                    filter_type: DECIMAL
+                    display_type: MONEY
+                    aggregation_type: SUM
+        - total_quantity:
+            required_cols: ["quantity"]
+            cols:
+                - total_quantity: 
+                    sql: "quantity"
+                    filter_type: INT
+                    display_type: INT
+                    aggregation_type: SUM
+        - avg_total_cost:
+            required_cols: [total_cost, quantity]
+            cols: 
+                - avg_total_cost: 
+                    sql: ["total_cost", "quantity"]
+                    filter_type: DECIMAL
+                    display_type: MONEY
+                    aggregation_type: DIV
+    dimensions:
+        - product:
+            base_table: dimproduct
+            required_cols: [product_id]
+            cols:
+                - product_id: 
+                    sql: "fact.product_id"
+                    filter_type: INT
+                    display_type: INT
+                    aggregation_type: GROUPBY
+                - name: 
+                    sql: "prod.name"
+                    filter_type: STRING
+                    display_type: STRING
+                    aggregation_type: AFTERGROUPBY
+                - curr_price: 
+                    sql: "prod.curr_price"
+                    filter_type: DECIMAL
+                    aggregation_type: AFTERGROUPBY
+                    display_type: MONEY
+            join_alias: "prod"
+        - order_date:
+            required_cols: [order_date]
+            cols:
+                - order_date: 
+                    sql: "fact.order_date"
+                    filter_type: TIMESTAMP
+                    display_type: TIMESTAMP
+                    aggregation_type: GROUPBY
+        - customer:
+            required_cols: [customer_id]
+            base_table: dimcustomer
+            cols:
+                - customer_id: 
+                    sql: "fact.customer_id"
+                    filter_type: INT
+                    display_type: INT
+                    aggregation_type: GROUPBY
+                - name: 
+                    sql: "cust.name"
+                    filter_type: STRING
+                    display_type: STRING
+                    aggregation_type: AFTERGROUPBY
+            join_alias: "cust"
+    reports:
+        - "Yearly totals by Customer":
+            cols: ["customer.name", "customer_id", "avg_total_cost", "summed_total_cost"]
+            filters:
+            - order_date:
+                filter_operator: BETWEEN
+                min: "2016-01-01"
+                max: "2016-12-31"
+        - "Product totals":
+            cols: ["product.name", "summed_total_cost", "total_quantity"]
+        - "Products by Customer":
+            cols: ["customer.name", "product.name", "avg_total_cost", "summed_total_cost", "total_quantity"]
+        
