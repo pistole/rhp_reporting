@@ -130,6 +130,9 @@ class Warehouse:
             return heapq.heappop(candidates)[1]
         return None        
 
+
+
+
 def build_column(key, value):
     return Column(value['sql'], FilterType[value['filter_type']], DisplayType[value['display_type']], AggregationType[value['aggregation_type']])
 
@@ -197,10 +200,11 @@ WHERE
 
 
 
-
-def lookup_columns(warehouse: Warehouse, column_name: str) -> List[str]:
+def lookup_columns(warehouse: Warehouse, column_name: str):
     entry = get_entry(warehouse, column_name)
     sql_def = get_column_from_entry(warehouse, entry, column_name)
+    # we need to pass the prefix for measure columns through so that
+    # we can pick the correct fact based on the hinting
     if '.' in column_name and is_measure(sql_def):
         (prefix, _, _) = column_name.rpartition('.')
         return [prefix+'.'+ x for x in entry.required_cols]
@@ -229,7 +233,7 @@ def get_base_fact(warehouse: Warehouse, report: Report) -> FactTable:
     fact_output_cols = [lookup_columns(warehouse, x) for x in raw_cols]
     return warehouse.find_compatible_tables(fact_output_cols)
 
-def get_joins(warehouse: Warehouse, report: Report) -> List[Dimension]:
+def get_joins(warehouse: Warehouse, report: Report):
     dims = [get_dimension_def(warehouse, x) for x in report.cols if '.' in x] + \
         [get_dimension_def(warehouse, x.name) for x in report.filters]
     return set([x for x in dims if x and x.base_table])
