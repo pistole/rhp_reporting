@@ -3,8 +3,10 @@
 stuff
 """
 
-
+from typing import List
 from enum import Enum, auto
+from dateutil import parser
+import heapq
 import psycopg2
 import yaml
 
@@ -69,16 +71,20 @@ class Measure:
         self.name = name
         self.required_cols = required_cols
         self.cols = cols
+        self.join_alias = None
+        self.base_table = None
 class FactTable:
-    def __init__(self, table, col_names):
+    def __init__(self, table, col_names, table_group = None):
         self.join_alias = 'fact'
         self.table = table
         self.col_names = col_names
+        self.table_group = table_group
 class DimensionTable:
-    def __init__(self, table, col_names):
+    def __init__(self, table, col_names, table_group = None):
         self.join_alias = table
         self.table = table
         self.col_names = col_names
+        self.table_group = table_group
 
 
 class Report:
@@ -98,10 +104,31 @@ class Filter:
 class Warehouse:
     def __init__(self, warehouse_dict):
         self.fact_tables = warehouse_dict['fact_tables']
-        self.dimension_tables = warehouse_dict['fact_tables']
+        self.dimension_tables = warehouse_dict['dimension_tables']
         self.measures = warehouse_dict['measures']
         self.dimensions = warehouse_dict['dimensions']
         self.reports = warehouse_dict['reports']
+
+    def definitions(self):
+        return self.measures + self.dimensions
+
+    def find_compatible_tables(self, required_cols):
+        # remove dupes
+        cols = sum(required_cols, [])
+        prefix_cols = [x for x in cols if '.' in x]
+        prefix = None
+        if prefix_cols:
+            # only consider the first prefix for now
+            (prefix, _, _) = prefix_cols[0].rpartition('.')
+            cols = [x if not '.' in x else x.rpartition('.')[2] for x in cols]
+        fact_cols = set(cols)
+        candidates = []
+        for table in self.fact_tables + self.dimension_tables:
+            if len(fact_cols) == len(fact_cols & set(table.col_names)) and (prefix is None or table.table_group == prefix):
+                heapq.heappush(candidates, (len(table.col_names), table))
+        if candidates:
+            return heapq.heappop(candidates)[1]
+        return None        
 
 def build_column(key, value):
     return Column(value['sql'], FilterType[value['filter_type']], DisplayType[value['display_type']], AggregationType[value['aggregation_type']])
@@ -115,7 +142,7 @@ def load_file(file_name: str) -> Warehouse:
     warehouse["fact_tables"] = []
     for curr in out["reporting"]["tables"]["facts"]:
         for key, val in curr.items():
-            warehouse["fact_tables"].append(FactTable(key, val['col_names']))
+            warehouse["fact_tables"].append(FactTable(key, val['col_names'], val.get('table_group', None)))
     warehouse["dimension_tables"] = []
     for curr in out["reporting"]["tables"]["dimensions"]:
         for key, val in curr.items():    
@@ -168,92 +195,110 @@ WHERE
 {limit}
 """
 
-def lookup_columns(warehouse: Warehouse, column_name: str):
-    cols = []
-    if not '.' in column_name:
-        cols = [x.required_cols for x in warehouse.measures if x.name == column_name] + \
-            [x.required_cols for x in warehouse.dimensions if x.name == column_name]
-    else:
-        (dimension, dot, actual_name) = column_name.rpartition('.')
-        cols = [x.required_cols for x in warehouse.dimensions if x.name == dimension]
-    return sum(cols, [])
 
-def get_dimension_def(warehouse: Warehouse, dim_col: str):
+
+
+def lookup_columns(warehouse: Warehouse, column_name: str) -> List[str]:
+    entry = get_entry(warehouse, column_name)
+    sql_def = get_column_from_entry(warehouse, entry, column_name)
+    if '.' in column_name and is_measure(sql_def):
+        (prefix, _, _) = column_name.rpartition('.')
+        return [prefix+'.'+ x for x in entry.required_cols]
+    return entry.required_cols
+
+
+
+def get_dimension_def(warehouse: Warehouse, dim_col: str) -> Dimension:
     (dimension, dot, actual_name) = dim_col.rpartition('.')
-    dim = None
+    dim = get_entry(warehouse, dim_col)
     if dimension == '':
-        dim = [x for x in warehouse.dimensions if dim_col in x.cols][0]
+        # this is used for group by, so don't include this dimension if it references the original table
         if dim.cols[dim_col].sql.startswith("fact."):
           dim = None
-    else:
-        dim = [x for x in warehouse.dimensions if x.name == dimension][0]
     return dim
 
-def get_measure_def(warehouse: Warehouse, measure_col:str ):
-    mes = [x for x in warehouse.measures if x.name == measure_col][0]
-    return mes
+def is_measure(sql_def: Column):
+    return sql_def.aggregation_type not in [AggregationType.AFTERGROUPBY, AggregationType.GROUPBY]
+
+def is_dimension(sql_def: Column):
+    return not is_measure(sql_def)
 
 
-def get_base_fact(warehouse: Warehouse, report: Report):
-    fact_output_cols = [lookup_columns(warehouse, x) for x in report.cols]
-    # remove dupes
-    fact_cols = set(sum(fact_output_cols, []))
-    for fact in warehouse.fact_tables:
-        if len(fact_cols) == len(fact_cols & set(fact.col_names)):
-            return fact
-    return None
+def get_base_fact(warehouse: Warehouse, report: Report) -> FactTable:
+    raw_cols = report.cols + [x.name for x in report.filters] + sum([x.required_cols for x in get_joins(warehouse, report)],[])
+    fact_output_cols = [lookup_columns(warehouse, x) for x in raw_cols]
+    return warehouse.find_compatible_tables(fact_output_cols)
 
-def get_dimensions(warehouse: Warehouse, report: Report):
+def get_joins(warehouse: Warehouse, report: Report) -> List[Dimension]:
     dims = [get_dimension_def(warehouse, x) for x in report.cols if '.' in x] + \
         [get_dimension_def(warehouse, x.name) for x in report.filters]
     return set([x for x in dims if x and x.base_table])
-def get_measure_col(warehouse: Warehouse, measure: Measure, column: str):
-    sql_def = measure.cols[column]
+
+def get_measure_sql(warehouse: Warehouse, sql_def: Column, column: str) -> str:
     sql = ''
+    actual_column = column
+    if '.' in column:
+        (_,_,actual_column) = column.rpartition('.')
     if sql_def.aggregation_type == AggregationType.DIV:
-        sql = 'SUM({})/NULLIF(SUM({}), 0) AS {}'.format(sql_def.sql[0], sql_def.sql[1], column)
+        sql = 'SUM({})/NULLIF(SUM({}), 0) AS {}'.format(sql_def.sql[0], sql_def.sql[1], actual_column)
     elif sql_def.aggregation_type == AggregationType.MAX:
-        sql = 'MAX({}) AS {}'.format(sql_def.sql, column)
+        sql = 'MAX({}) AS {}'.format(sql_def.sql, actual_column)
     elif sql_def.aggregation_type == AggregationType.SUM:
-        sql = 'SUM({}) AS {}'.format(sql_def.sql, column)
+        sql = 'SUM({}) AS {}'.format(sql_def.sql, actual_column)
     else:
-        sql = '{} AS {}'.format(sql_def.sql, column)
+        sql = '{} AS {}'.format(sql_def.sql, actual_column)
     return sql
 
-def get_dimension_col(warehouse: Warehouse, dimension: Dimension, actual_column: str):
-    sql_def = dimension.cols[actual_column]
+def get_dimension_sql(warehouse: Warehouse, sql_def: Column, column: str) -> str:
     sql = ''
+    actual_column = column
+    if '.' in column:
+        (_,_,actual_column) = column.rpartition('.')
     # TODO aggregation types handling
     sql = '{} AS {}'.format(sql_def.sql, actual_column)
     return sql
 
-def get_dimension_groupby(warehouse: Warehouse, dimension: Dimension, actual_column: str):
-    sql_def = dimension.cols[actual_column]
-    group_by = sql_def.sql
-    return group_by
+def get_filter_type(warehouse: Warehouse, column: str) -> FilterType:
+    return get_column_object(warehouse, column).filter_type
+
+def get_entry(warehouse: Warehouse, column: str):
+    if ('.' in column):
+        (prefix, _, actual_col) = column.rpartition('.')
+        dims = [y for y in [x for x in warehouse.dimensions if x.name == prefix] if actual_col in y.cols]
+        if dims:
+            return dims[0]
+        column = actual_col
+    defs = [y for y in [x for x in warehouse.definitions()] if column in y.cols]
+    if defs:
+        return defs[0]
+    return None
+
+def get_column_from_entry(warehouse: Warehouse, entry, column:str) -> Column:
+    if entry:
+        if ('.' in column):
+            (_,_,actual) = column.rpartition('.')
+            return entry.cols[actual]
+        return entry.cols[column]
+    return None
 
 
+def get_column_object(warehouse: Warehouse, column: str) -> Column:
+    return get_column_from_entry(warehouse, get_entry(warehouse, column), column)
+            
+def get_group_cols(warehouse: Warehouse, column: str) -> str:
+    sql_def = get_column_object(warehouse, column)
+    if sql_def.aggregation_type in [AggregationType.AFTERGROUPBY, AggregationType.GROUPBY]:
+        return sql_def.sql
+    return ''
 
-def get_group_cols(warehouse, column):
-    groupby = ''
-    if '.' in column:
-        (dimension, dot, actual_name) = column.rpartition('.')
-        return get_dimension_groupby(warehouse, get_dimension_def(warehouse, column), actual_name)
-    elif len([x for x in warehouse.dimensions if column in x.cols]) > 0:
-        return get_dimension_groupby(warehouse, [x for x in warehouse.dimensions if column in x.cols][0], column)
-    return groupby
-
-def get_col(warehouse, column):
-    if '.' in column:
-        (dimension, dot, actual_name) = column.rpartition('.')
-        return get_dimension_col(warehouse, get_dimension_def(warehouse, column), actual_name)
-    elif len([x for x in warehouse.dimensions if column in x.cols]) > 0:
-        return get_dimension_col(warehouse, [x for x in warehouse.dimensions if column in x.cols][0], column)
+def get_col_sql(warehouse: Warehouse, column: str) -> str:
+    sql_def = get_column_object(warehouse, column)
+    if is_measure(sql_def):
+        return get_measure_sql(warehouse, sql_def, column)
     else:
-        return get_measure_col(warehouse, get_measure_def(warehouse, column), column)
+        return get_dimension_sql(warehouse, sql_def, column)
 
-
-def lookup_operator(filter_operator, value):
+def lookup_operator(filter_operator: FilterOperator, value) -> str:
     filter_operator_map = {
         FilterOperator.EQUALS: '=',
         FilterOperator.GREATER: '>',
@@ -275,7 +320,22 @@ def lookup_operator(filter_operator, value):
         return filter_operator_map_none[filter_operator]
     return filter_operator_map[filter_operator]
 
-def get_where_and_params(warehouse, report, prefix=''):
+def get_filter_value(filter_type, value):
+    filter_type_map = {
+        FilterType.DATE: lambda x: parser.parse(x),
+        FilterType.TIMESTAMP: lambda x: parser.parse(x),
+        FilterType.DECIMAL: lambda x: Decimal(x),
+        FilterType.INT: lambda x: int(x),
+    }
+
+    # pass nulls through un-casted
+    if not value:
+        return value
+    if (filter_type in filter_type_map):
+        return filter_type_map[filter_type](value)
+    return value
+
+def get_where_and_params(warehouse: Warehouse, report: Report, prefix=''):
     if not report.filters:
         return ('', {})
     if prefix !='' and not prefix.endswith('.'):
@@ -292,22 +352,23 @@ def get_where_and_params(warehouse, report, prefix=''):
         i=0
         sql = sql + 'AND ('
         for curr_filter in filter_list:
+            filter_type = get_filter_type(warehouse, curr_filter.name)
             if i > 0:
                 sql = sql + ' OR '
             base_name = prefix + curr_filter.name +'.' + str(curr_filter.filter_operator)
-            col_name = get_col(warehouse, curr_filter.name).rpartition(' AS ')[0]
+            col_name = get_col_sql(warehouse, curr_filter.name).rpartition(' AS ')[0]
             if curr_filter.filter_operator is FilterOperator.BETWEEN:
                 param_name_min = base_name + str(i)
                 i = i +1
-                params[param_name_min] = curr_filter.filter_min
+                params[param_name_min] = get_filter_value(filter_type, curr_filter.filter_min)
                 param_name_max = base_name + str(i)
                 i = i +1
-                params[param_name_max] = curr_filter.filter_max
+                params[param_name_max] = get_filter_value(filter_type, curr_filter.filter_max)
                 sql = sql + col_name + ' BETWEEN  %('+ param_name_min +')s  AND %('+param_name_max+')s '
             elif curr_filter.filter_operator is FilterOperator.SUBSTRING:
                 param_name = base_name + str(i)
                 i = i +1
-                params[param_name] = curr_filter.filter_value
+                params[param_name] = get_filter_value(filter_type, curr_filter.filter_value)
                 param_name_decorated = '\'%%\' || %('+ param_name +')s || \'%%\''
                 if not curr_filter.filter_value:
                     param_name_decorated = param_name
@@ -315,29 +376,29 @@ def get_where_and_params(warehouse, report, prefix=''):
             else:
                 param_name = base_name + str(i)
                 i = i +1
-                params[param_name] = curr_filter.filter_value
+                params[param_name] = get_filter_value(filter_type, curr_filter.filter_value)
                 sql = sql + col_name + ' ' + lookup_operator(curr_filter.filter_operator, curr_filter.filter_value) + ' %('+ param_name +')s '
 
 
         sql = sql + ')\n'
     return (sql, params)
 
-def build_query(warehouse: Warehouse, report: Report):
+def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_prefix=''):
     schema = 'reporting.'
     fact = get_base_fact(warehouse, report)
     cte = ''
-    cols = ',\n    '.join([get_col(warehouse, x) for x in report.cols])
+    cols = ',\n    '.join([get_col_sql(warehouse, x) for x in report.cols])
     from_cl = schema + fact.table + ' fact'
 
 
 
     joins = ''
-    dims = get_dimensions(warehouse, report)
+    dims = get_joins(warehouse, report)
     if dims:
         for dim in dims:
             joins = joins + 'INNER JOIN ' + schema + dim.base_table + ' ' + dim.join_alias + ' USING (' + ', '.join(dim.required_cols) + ')\n    '
 
-    (where, params) = get_where_and_params(warehouse, report)
+    (where, params) = get_where_and_params(warehouse, report, param_prefix)
     
     group_by = [get_group_cols(warehouse, x) for x in report.cols]
     group_by = [x for x in group_by if x != '']

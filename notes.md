@@ -1,14 +1,10 @@
 # Objects needed
 * Low level query wrapper
     * CTEs
-    * SELECT
-    * JOINS
-    * WHERE
-    * GROUP BY
-    * HAVING
     * LIMIT
+    * ORDER
 * Filters
-    * equals, substring, >=, <, between, not equals, IS NULL
+    * IN
 * Report
     * Columns
         * unnamespaced measures and dimension data namespaced by table
@@ -34,32 +30,40 @@
         * filter_type
         * display_type
         * aggregation_type (? sum, max, min, divide?)
-# Done 2017-08-10
+# Done 2017-08-11
 * dimension filters
-* filtering on dimensions requires their joins
+* automatic joins
 * join deduplication
 * unit test
 * is null
 * add secondary fact tables to sample schema
 * data generation for sample schema
+* filtering on dimensions requires their joins
 * warehouse class
-# Todos 2017-08-09
-* type hinting (In progress)
-* figure out measure naming wrt to unrelated fact tables (fact groups?)
+* pick least granular table that has all our required cols (rollups)
+* dimensions as facts v1
 * properly cast filter types before sending to the db driver
-* investigate other postgresql drivers (psycopg2 does not do server-side parameter binding which bothers me)
-* lookup metadata for each col once
+* lookup metadata for each col in a consistent way
+* figure out measure naming wrt to unrelated fact tables (fact groups?)
+    * namespaced measures, I think
+    * fact table groups
+        * eg, label all the orderline tables as order, then refer to quantity as order.quantity
+# Todos 2017-08-11
+* type hinting (In progress)
 * having clauses (measure filters)
+* use dimensions as facts (handle table aliases correctly)
+* composite key joins
+* memoize metadata lookups
+* investigate other postgresql drivers (psycopg2 does not do server-side parameter binding which bothers me)
 * custom aggregation types
 * in clause filters
     * group by filter id and then by filter operator and *then* we can get our list
-* custom names for report columns
+* custom  names for report columns
 * ctes / multi fact table joins
-* use dimensions as facts (handle table aliases correctly)
+    * recursive query generation
+    * handle facts at different granularities
 * date dimensions hierarchy?
 * role playing dimensions (ordered_product_id, replacement_product_id?)
-* pick least granular table that has all our required cols (rollups)
-* handle facts at different granularities
 * multi-fact measures (sum(fact.total_cost) - sum(fact2.inventory_cost))
 * handle re-aggregation of division metrics (split into components and only divide in outermost query)
 * paging / sorting (separate paging query? composite keys?)
@@ -68,8 +72,9 @@
 * use psycopg2's sql manipulation api
 * add secondary fact and remaining dimensions to yaml file
 * schema introspection to build skeleton warehouse
+    * write yaml file
 * separate files
-* generator class
+* query builder class
 * __init__ files
 * docs
 * pylinting

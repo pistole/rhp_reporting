@@ -3,6 +3,13 @@ reporting:
         facts:
             - factorderline:
                 col_names: [order_line_id, product_id, order_date, ship_date, customer_id, campaign_id, order_status_id, quantity, total_discount, total_price, total_cost]
+                table_group: order
+            - factorderline_product:
+                col_names: [product_id, quantity, total_discount, total_price, total_cost]
+                table_group: order
+            - factinventoryevent:
+                col_names: [product_id, quantity, event_date, unit_cost]
+                table_group: inven
         dimensions:
             - dimproduct:
                 col_names: [product_id, name, curr_price]
@@ -119,3 +126,9 @@ reporting:
                 - product_id:
                     filter_operator: EQUALS
                     value: null
+        - "All Products":
+            cols: [product.name, product_id]
+        - "All Products on hand":
+            cols: [product.name, inven.total_quantity]
+        - "All Products sold":
+            cols: [product.name, order.total_quantity]
