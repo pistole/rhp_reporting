@@ -32,6 +32,14 @@ reporting:
                     filter_type: INT
                     display_type: INT
                     aggregation_type: SUM
+        - total_unit_cost:
+            required_cols: ["quantity", "unit_cost"]
+            cols:
+                - total_unit_cost: 
+                    sql: "quantity * unit_cost"
+                    filter_type: INT
+                    display_type: INT
+                    aggregation_type: SUM
         - avg_total_cost:
             required_cols: [total_cost, quantity]
             cols: 
@@ -132,3 +140,9 @@ reporting:
             cols: [product.name, inven.total_quantity]
         - "All Products sold":
             cols: [product.name, order.total_quantity]
+        - "All Products sold price and inventory total cost":
+            cols: [product.name, order.summed_total_cost, inven.total_unit_cost]
+        - "All Products sold price and inventory total cost with prod_id":
+            cols: [product.name, order.summed_total_cost, inven.total_unit_cost, product_id]
+        - "All Products num products sold and on hand":
+            cols: [product.name, order.total_quantity, inven.total_quantity]

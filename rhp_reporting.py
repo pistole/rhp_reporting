@@ -128,7 +128,7 @@ class Warehouse:
                 heapq.heappush(candidates, (len(table.col_names), table))
         if candidates:
             return heapq.heappop(candidates)[1]
-        return None        
+        return None
 
 
 
@@ -387,12 +387,110 @@ def get_where_and_params(warehouse: Warehouse, report: Report, prefix=''):
         sql = sql + ')\n'
     return (sql, params)
 
+
+def get_fact_prefixes(warehouse, report):
+    raw_cols = report.cols + [x.name for x in report.filters] + sum([x.required_cols for x in get_joins(warehouse, report)],[])
+    fact_output_cols = sum([lookup_columns(warehouse, x) for x in raw_cols], [])
+    return set([x.rpartition('.')[0] for x in fact_output_cols if '.' in x])
+
+
+def has_multiple_facts(warehouse: Warehouse, report: Report):
+    return len(get_fact_prefixes(warehouse, report)) > 1   
+
+
+def build_multifact_query(warehouse: Warehouse, report: Report):
+    prefixes = get_fact_prefixes(warehouse, report)
+    raw_cols = report.cols + [x.name for x in report.filters] + sum([x.required_cols for x in get_joins(warehouse, report)],[])
+    cols = sum([lookup_columns(warehouse, x) for x in raw_cols],[])
+
+    shared_cols = [x for x in cols if '.' not in x]
+    dim_cols = []
+    prefixed_cols = {}
+
+    for x in report.cols:
+        if '.' in x:            
+            (prefix,_,_) = x.rpartition('.')
+            if (prefix not in prefixes):
+                dim_cols.append(x)
+                continue
+            if prefix not in prefixed_cols:
+                prefixed_cols[prefix] = []
+            prefixed_cols[prefix].append(x)
+    shared_cols = list(set(shared_cols))
+    i = 0;
+    ctes = {}
+    first_fact = None
+    cte_dims = []
+    for key in prefixed_cols:
+        cte_name = "cte_{}".format(i)
+        cte_cols = shared_cols + prefixed_cols[key]
+        cte_report = Report(cte_name, cte_cols, report.filters)
+        ctes[cte_name] = build_query(warehouse, cte_report, True, cte_name)
+        if i == 0:
+            fact = FactTable(cte_name, cte_cols, key)
+            first_fact = fact
+        else:
+            dim = DimensionTable(cte_name, cte_cols, key)
+            cte_dims.append(dim)
+        i+=1
+
+    warehouse_dict = {
+        'fact_tables': [first_fact],
+        'dimension_tables': warehouse.dimension_tables, 
+        'measures': warehouse.measures, 
+        'dimensions': warehouse.dimensions, 
+        'reports': warehouse.reports
+    }
+    report_warehouse = Warehouse(warehouse_dict)
+
+    schema = 'reporting.'
+    cte = 'WITH \n'  + ',\n'.join(['{} as ({})'.format(x, ctes[x]['query']) for x in ctes])
+
+    all_cols = []
+    all_cols = [x.replace(first_fact.table_group, 'fact') + ' AS ' + x.replace('.', '_') for x in first_fact.col_names if x in report.cols]
+    for dim in cte_dims:
+        all_cols = all_cols + [x.replace(dim.table_group, dim.table) + ' AS ' + x.replace('.', '_') for x in dim.col_names if x.startswith(dim.table_group)]
+    all_cols = all_cols + [get_col_sql(warehouse, x) for x in dim_cols]
+    cols = ',\n    '.join(all_cols)
+    from_cl = first_fact.table + ' fact'
+
+
+
+
+    joins = ''
+    for dim_table in cte_dims:
+        joins = joins + ' INNER JOIN ' + dim_table.table + ' ' + dim_table.join_alias + ' USING (' + ', '.join(shared_cols) + ')\n    '
+    dims = get_joins(report_warehouse, report)
+    if dims:
+        for dim in dims:
+            joins = joins + ' INNER JOIN ' + schema + dim.base_table + ' ' + dim.join_alias + ' USING (' + ', '.join(dim.required_cols) + ')\n    '
+
+    (where, params) = get_where_and_params(warehouse, report, '')
+    for key in ctes:
+        params.update(ctes[key])    
+    group = ''
+    having = ''
+    order = ''
+    limit = ''
+
+    val_dict = {"cte": cte, "cols": cols, "from": from_cl, "joins": joins, "where": where, "group": group, "having": having, "order": order, "limit": limit}
+    return {"query": base_template.format(**val_dict), "params": params}
+
+
 def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_prefix=''):
+
+    if not is_subquery and has_multiple_facts(warehouse, report):
+        return build_multifact_query(warehouse, report)
+    if (has_multiple_facts(warehouse, report)):
+        print(get_fact_prefixes(warehouse, report))
+        print(report.cols)
+        return None
     schema = 'reporting.'
     fact = get_base_fact(warehouse, report)
     cte = ''
     cols = ',\n    '.join([get_col_sql(warehouse, x) for x in report.cols])
     from_cl = schema + fact.table + ' fact'
+
 
 
 

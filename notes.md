@@ -48,6 +48,11 @@
         * namespaced measures, I think
         * fact table groups
             * eg, label all the orderline tables as order, then refer to quantity as order.quantity
+    * composite key joins
+    * ctes / multi fact table joins
+        * unique aliases for shared measures (prefix_)
+        * recursive query generation
+
 # Todos 2017-08-11
     * separate warehouse introspection code from sql generation code
     * Table base class
@@ -58,7 +63,6 @@
     * having clauses (measure filters)
     * use dimensions as facts (handle table aliases correctly)
     * more tests around filtering and joins
-    * composite key joins
     * memoize metadata lookups
     * investigate other postgresql drivers (psycopg2 does not do server-side parameter binding which bothers me)
     * custom aggregation types
@@ -66,7 +70,6 @@
         * group by filter id and then by filter operator and *then* we can get our list
     * custom  names for report columns
     * ctes / multi fact table joins
-        * recursive query generation
         * handle facts at different granularities
     * date dimensions hierarchy?
     * role playing dimensions (ordered_product_id, replacement_product_id?)
