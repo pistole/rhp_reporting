@@ -128,6 +128,18 @@ class Warehouse:
                 heapq.heappush(candidates, (len(table.col_names), table))
         if candidates:
             return heapq.heappop(candidates)[1]
+        # There's not an exact match, look for the table that has the most number of the dimensions we need
+        for table in self.fact_tables + self.dimension_tables:
+            if prefix is not None and table.table_group != prefix:
+                continue
+            # figure out how many columns are in the intersection of our required cols and 
+            #   the current candidate
+            # heapq returns the minimum value, so take -len
+            heapq.heappush(candidates, (-len(fact_cols.intersection(set(table.col_names))),table))
+        if candidates:
+            # take the one with the most matching cols
+            return heapq.heappop(candidates)[1]
+        
         return None
 
 
@@ -459,7 +471,10 @@ def build_multifact_query(warehouse: Warehouse, report: Report):
 
     joins = ''
     for dim_table in cte_dims:
-        joins = joins + ' INNER JOIN ' + dim_table.table + ' ' + dim_table.join_alias + ' USING (' + ', '.join(shared_cols) + ')\n    '
+        cte_base_fact = ctes[dim_table.table]['fact']
+        shared_cte_dim_cols = [x for x in shared_cols if x in cte_base_fact.col_names]
+        print(shared_cte_dim_cols)
+        joins = joins + ' INNER JOIN ' + dim_table.table + ' ' + dim_table.join_alias + ' USING (' + ', '.join(shared_cte_dim_cols) + ')\n    '
     dims = get_joins(report_warehouse, report)
     if dims:
         for dim in dims:
@@ -476,6 +491,12 @@ def build_multifact_query(warehouse: Warehouse, report: Report):
     val_dict = {"cte": cte, "cols": cols, "from": from_cl, "joins": joins, "where": where, "group": group, "having": having, "order": order, "limit": limit}
     return {"query": base_template.format(**val_dict), "params": params}
 
+def fact_match_col(col, fact):
+    if not col.startswith('fact.'):
+        return True
+    (_,_,col_name) = col.rpartition('.')
+    return col_name in fact.col_names
+
 
 def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_prefix=''):
 
@@ -488,7 +509,7 @@ def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_p
     schema = 'reporting.'
     fact = get_base_fact(warehouse, report)
     cte = ''
-    cols = ',\n    '.join([get_col_sql(warehouse, x) for x in report.cols])
+    cols = ',\n    '.join([get_col_sql(warehouse, x) for x in report.cols if x in fact.col_names or '.' in x])
     from_cl = schema + fact.table + ' fact'
 
 
@@ -503,7 +524,7 @@ def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_p
     (where, params) = get_where_and_params(warehouse, report, param_prefix)
     
     group_by = [get_group_cols(warehouse, x) for x in report.cols]
-    group_by = [x for x in group_by if x != '']
+    group_by = [x for x in group_by if x != '' and fact_match_col(x, fact)]
     group = ''
     if group_by:
         group = 'GROUP BY ' + ', '.join(set(group_by))
@@ -512,7 +533,7 @@ def build_query(warehouse: Warehouse, report: Report, is_subquery=False, param_p
     limit = ''
 
     val_dict = {"cte": cte, "cols": cols, "from": from_cl, "joins": joins, "where": where, "group": group, "having": having, "order": order, "limit": limit}
-    return {"query": base_template.format(**val_dict), "params": params}
+    return {"query": base_template.format(**val_dict), "params": params, 'fact': fact}
 
 
 def main():

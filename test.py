@@ -12,6 +12,7 @@ class ReportTest(unittest.TestCase):
             with conn.cursor() as cursor:
                 for report in self.warehouse.reports:
                     q = build_query(self.warehouse, report)
+                    print(q["query"])
                     cursor.execute(q["query"], q["params"])
 
 
